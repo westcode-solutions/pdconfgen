@@ -79,7 +79,6 @@ fn handle_varbinds(vars: Vec<SnmpVariable<>>) {
 }
 
 fn handle_v1trap(pdu: SnmpTrapPdu, id: u32) {
-    println!("SNMPv1 trap: {:?}", pdu);
 
     let address = match pdu.agent_addr {
         NetworkAddress::IPv4(adr) => adr
@@ -167,8 +166,6 @@ alert id="1042"
 */
 
 fn handle_v2trap(pdu: SnmpGenericPdu, id: u32) {
-    println!("SNMPv2 trap: {:?}", pdu);
-
     println!("");
     println!("alert id=\"{}\"",id);
     println!("{{");    
@@ -223,11 +220,14 @@ fn main() {
         // "Resize" buf
         let buf = &mut buf[..amt];
 
+        // TODO Enable with parameter
+/*
         println!("Received data from {}. Length={}", src, buf.len());
         for byte in buf.iter() {
             print!("{:x} ",byte);
         }
         println!("");
+*/
 
         let (rest, obj) = match parse_snmp_generic_message(&buf) {
             Ok((rest, obj)) => (rest, obj),
@@ -236,6 +236,9 @@ fn main() {
                 return
             }
         };
+
+        // TODO Enable with parameter
+//        println!("SNMP: {:#?}", obj);
 
         if rest.len() != 0 {
             println!("Not all data was parsed. Rest: '{}'", rest.len());
