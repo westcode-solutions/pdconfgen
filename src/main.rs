@@ -22,31 +22,8 @@ alert id="42"
 }
 */
 
-fn handle_v1trap(pdu: SnmpTrapPdu) {
-    println!("SNMPv1 trap: {:?}", pdu);
-
-    let id = 42;
-
-    let address = match pdu.agent_addr {
-        NetworkAddress::IPv4(adr) => adr
-    };
-
-    let generic = match pdu.generic_trap {
-        TrapType(val) => val
-    };
-
-    println!("");
-    println!("alert id=\"{}\"",id);
-    println!("{{");    
-    println!("\tsnmp-v1-trap");    
-    println!("\t{{");
-
-    println!("\t\tagent-addr value=\"{}\";",address);
-    println!("\t\tenterprise value=\"{}\";",pdu.enterprise);
-    println!("\t\tgeneric-trap value=\"{}\";",generic);
-    println!("\t\tspecific-trap value=\"{}\";",pdu.specific_trap);
-
-    for varbind in pdu.var {
+fn handle_varbinds(vars: Vec<SnmpVariable<>>) {
+    for varbind in vars {
 
         let (data, datatype, comment) = match varbind.val {
             ObjectSyntax::String(data) => {
@@ -75,14 +52,21 @@ fn handle_v1trap(pdu: SnmpTrapPdu) {
             },
             ObjectSyntax::Number(data) => {
                 let val = match data.content {
-                    DerObjectContent::Integer(i) => {
-                        let mut val:i32 = 0;
-                        for byte in i {
-                            val = (val << 8) + *byte as i32;
+                    DerObjectContent::Integer(int) => {
+                        if int.len() > 4 {
+                            println!("Integer too long '{:?}'", int);
+                            return
                         }
-                        val
+                        let mut tmp:i32 = int[0] as i8 as i32;
+                        for idx in 1..int.len() {
+                            tmp = (tmp << 8) | (int[idx] as i32)
+                        }
+                        tmp
                     },
-                    _ => 0
+                    _ => {
+                        println!("Unhandled number '{:?}'", data.content);
+                        return
+                    }
                 };
                 (val.to_string(),"INTEGER","integer")
             },
@@ -92,6 +76,31 @@ fn handle_v1trap(pdu: SnmpTrapPdu) {
 
         println!("\t\tvarbind var=\"{}\" type=\"{}\" value=\"{}\"; # {}",varbind.oid,datatype,data,comment);
     }
+}
+
+fn handle_v1trap(pdu: SnmpTrapPdu, id: u32) {
+    println!("SNMPv1 trap: {:?}", pdu);
+
+    let address = match pdu.agent_addr {
+        NetworkAddress::IPv4(adr) => adr
+    };
+
+    let generic = match pdu.generic_trap {
+        TrapType(val) => val
+    };
+
+    println!("");
+    println!("alert id=\"{}\"",id);
+    println!("{{");    
+    println!("\tsnmp-v1-trap");    
+    println!("\t{{");
+
+    println!("\t\tagent-addr value=\"{}\";",address);
+    println!("\t\tenterprise value=\"{}\";",pdu.enterprise);
+    println!("\t\tgeneric-trap value=\"{}\";",generic);
+    println!("\t\tspecific-trap value=\"{}\";",pdu.specific_trap);
+
+    handle_varbinds(pdu.var);
 
     println!("\t}}");
     println!("}}");
@@ -127,11 +136,11 @@ UINT32, UINT ASN.1 BER typ 0x47
 IP, IP-ADDR, IP-ADDRESS ASN.1 BER typ 0x40
 */
 
-fn handle_v1(obj: SnmpMessage) {
+fn handle_v1(obj: SnmpMessage, id: u32) {
     println!("set snmp-community=\"{}\";", obj.community);
 
     match obj.pdu {
-        SnmpPdu::TrapV1(pdu) => handle_v1trap(pdu),
+        SnmpPdu::TrapV1(pdu) => handle_v1trap(pdu, id),
         _ => {
             println!("Unhandled SNMPv1 PDU type '{:?}'", obj);
             return
@@ -157,16 +166,33 @@ alert id="1042"
 }
 */
 
-fn handle_v2trap(obj: SnmpMessage) {
-    println!("SNMPv2 trap: {:?}", obj);
+fn handle_v2trap(pdu: SnmpGenericPdu, id: u32) {
+    println!("SNMPv2 trap: {:?}", pdu);
 
+    println!("");
+    println!("alert id=\"{}\"",id);
+    println!("{{");    
+    println!("\tsnmp-v2-trap");    
+    println!("\t{{");
+
+    handle_varbinds(pdu.var);
+
+    println!("\t}}");
+    println!("}}");
+    println!("");
 }
 
-fn handle_v2(obj: SnmpMessage) {
+fn handle_v2(obj: SnmpMessage, id: u32) {
+    if obj.pdu_type() != PduType::TrapV2 {
+        println!("Unhandled SNMPv2 PDU type '{:?}'", obj);
+        return
+    }
+
     println!("set snmp-community=\"{}\";", obj.community);
 
-    match obj.pdu_type() {
-        PduType::TrapV2 => handle_v2trap(obj),
+
+    match obj.pdu {
+        SnmpPdu::Generic(pdu) => handle_v2trap(pdu, id),
         _ => {
             println!("Unhandled SNMPv2 PDU type '{:?}'", obj);
             return
@@ -183,44 +209,49 @@ fn main() {
         }
     };
 
-    let mut buf = [0; 1500];
-    let (amt, src) = match socket.recv_from(&mut buf) {
-        Ok(res) => res,
-        Err(e) => {
-            println!("Failed to read from socket. Error: '{}'", e);
+    let mut id = 0;
+
+    loop {
+        let mut buf = [0; 1500];
+        let (amt, src) = match socket.recv_from(&mut buf) {
+            Ok(res) => res,
+            Err(e) => {
+                println!("Failed to read from socket. Error: '{}'", e);
+                return
+            }
+        };
+        // "Resize" buf
+        let buf = &mut buf[..amt];
+
+        println!("Received data from {}. Length={}", src, buf.len());
+        for byte in buf.iter() {
+            print!("{:x} ",byte);
+        }
+        println!("");
+
+        let (rest, obj) = match parse_snmp_generic_message(&buf) {
+            Ok((rest, obj)) => (rest, obj),
+            Err(e) => {
+                println!("Failed to parse object. Error: '{}'", e);
+                return
+            }
+        };
+
+        if rest.len() != 0 {
+            println!("Not all data was parsed. Rest: '{}'", rest.len());
             return
         }
-    };
-    // "Resize" buf
-    let buf = &mut buf[..amt];
 
-    println!("Received data from {}. Length={}", src, buf.len());
-    for byte in buf.iter() {
-        print!("{:x} ",byte);
+        match obj {
+            SnmpGenericMessage::V1(obj) => handle_v1(obj, id),
+            SnmpGenericMessage::V2(obj) => handle_v2(obj, id),
+            _ => {
+                println!("Unhandled SNMP type '{:?}'", obj);
+                return
+            }
+        };
+
+        id += 1;
     }
-    println!("");
-
-    let (rest, obj) = match parse_snmp_generic_message(&buf) {
-        Ok((rest, obj)) => (rest, obj),
-        Err(e) => {
-            println!("Failed to parse object. Error: '{}'", e);
-            return
-        }
-    };
-
-    if rest.len() != 0 {
-        println!("Not all data was parsed. Rest: '{}'", rest.len());
-        return
-    }
-
-    match obj {
-        SnmpGenericMessage::V1(obj) => handle_v1(obj),
-        SnmpGenericMessage::V2(obj) => handle_v2(obj),
-        _ => {
-            println!("Unhandled SNMP type '{:?}'", obj);
-            return
-        }
-    };
-
 }
 
