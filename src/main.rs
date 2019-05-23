@@ -9,7 +9,12 @@ use snmp_parser::*;
 extern crate der_parser;
 use der_parser::*;
 
+extern crate clap;
+use clap::{Arg, App};
+
 /*
+PD Sentry SNMPv1 Syntax:
+
 alert id="42"
 {
     snmp-v1-trap 
@@ -107,6 +112,8 @@ fn handle_v1trap(pdu: SnmpTrapPdu, id: u32) {
 }
 
 /*
+From rust snmp-parser:
+
 Number(DerObject<'a>)
 String(&'a [u8])
 Object(Oid)
@@ -124,7 +131,10 @@ UInteger32(u32)
 UnknownApplication(u8, &'a [u8])
 */
 
+
 /*
+From PD Sentry documentation:
+
 OID ASN.1 BER typ 0x06
 STRING ASN.1 BER typ 0x1C
 OCTET-STRING ASN.1 BER typ 0x04
@@ -148,6 +158,8 @@ fn handle_v1(obj: SnmpMessage, id: u32) {
 }
 
 /*
+PD Sentry SNMPv2 syntax:
+
 alert id="1042"
 {
     snmp-v2-trap 
@@ -198,7 +210,27 @@ fn handle_v2(obj: SnmpMessage, id: u32) {
 }
 
 fn main() {
-    let mut socket = match UdpSocket::bind("127.0.0.1:34254") {
+    let default_addr = "127.0.0.1:34254";
+
+    let matches = App::new("PD Sentry Configuration Generator")
+                          .version("0.0.1")
+                          .author("Mathias Olsson <mathias.olsson@westcode.se>")
+                          .about("Generates sample configuration for PD Sentry from SNMP traps")
+                          .arg(Arg::with_name("listen")
+                               .short("l")
+                               .long("listen-address")
+                               .help(&format!("IP address and port to listen to. Default {}",default_addr))
+                               .takes_value(true))
+                          .arg(Arg::with_name("verbose")
+                               .short("v")
+                               .long("verbose")
+                               .help("Sets the level of verbosity"))
+                          .get_matches();
+
+    let addr = matches.value_of("listen").unwrap_or(default_addr);
+    let verbose = matches.is_present("verbose");
+
+    let socket = match UdpSocket::bind(addr) {
         Ok(socket) => socket,
         Err(e) => {
             println!("Failed to open socket. Error: '{}'", e);
@@ -220,14 +252,13 @@ fn main() {
         // "Resize" buf
         let buf = &mut buf[..amt];
 
-        // TODO Enable with parameter
-/*
-        println!("Received data from {}. Length={}", src, buf.len());
-        for byte in buf.iter() {
-            print!("{:x} ",byte);
+        if verbose {
+            println!("Received data from {}. Length={}", src, buf.len());
+            for byte in buf.iter() {
+                print!("{:x} ",byte);
+            }
+            println!("");
         }
-        println!("");
-*/
 
         let (rest, obj) = match parse_snmp_generic_message(&buf) {
             Ok((rest, obj)) => (rest, obj),
@@ -237,8 +268,9 @@ fn main() {
             }
         };
 
-        // TODO Enable with parameter
-//        println!("SNMP: {:#?}", obj);
+        if verbose {
+            println!("SNMP: {:#?}", obj);
+        }
 
         if rest.len() != 0 {
             println!("Not all data was parsed. Rest: '{}'", rest.len());
