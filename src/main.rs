@@ -1,7 +1,6 @@
 
 
 use std::net::UdpSocket;
-use std::str;
 
 extern crate snmp_parser;
 use snmp_parser::*;
