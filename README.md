@@ -1,4 +1,6 @@
 
+[![Build Status](https://travis-ci.org/westcode-solutions/pdconfgen.svg?branch=master)](https://travis-ci.org/westcode-solutions/pdconfgen)
+
 # pdconfgen
 
 Generate example PD Sentry configuration by sending an snmp trap to pdconfgen.
